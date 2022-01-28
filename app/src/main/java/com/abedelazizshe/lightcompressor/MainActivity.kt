@@ -4,8 +4,11 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ClipData
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.database.Cursor
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -19,11 +22,12 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.abedelazizshe.lightcompressorlibrary.CompressionListener
 import com.abedelazizshe.lightcompressorlibrary.VideoCompressor
-import com.abedelazizshe.lightcompressorlibrary.VideoQuality
 import com.abedelazizshe.lightcompressorlibrary.config.Configuration
 import kotlinx.android.synthetic.main.activity_main.*
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileOutputStream
 
 /**
  * Created by AbedElaziz Shehadeh on 26 Jan, 2020
@@ -146,6 +150,17 @@ class MainActivity : AppCompatActivity() {
     private fun processVideo() {
         mainContents.visibility = View.VISIBLE
 
+        val (width, height) = MediaMetadataRetriever().run {
+            setDataSource(getMediaPath(this@MainActivity, uris[0]))
+            val rawWidth = extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)!!.toDouble()
+            val rawHeight = extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)!!.toDouble()
+            if (rawWidth > rawHeight) {
+                (rawWidth * 720.0 / rawHeight) to 720.0
+            } else {
+                720.0 to (rawHeight * 720.0 / rawWidth)
+            }
+        }
+
         GlobalScope.launch {
             VideoCompressor.start(
                 context = applicationContext,
@@ -195,10 +210,52 @@ class MainActivity : AppCompatActivity() {
                     }
                 },
                 configureWith = Configuration(
-                    quality = VideoQuality.LOW,
-                    isMinBitrateCheckEnabled = true,
+                    videoWidth = width,
+                    videoHeight = height,
+                    videoBitrate = 1_000_000,
+                    disableAudio = true,
+                    frameRate = 30,
+                    isMinBitrateCheckEnabled = false,
                 )
             )
+        }
+    }
+
+    private fun getMediaPath(context: Context, uri: Uri): String {
+
+        val resolver = context.contentResolver
+        val projection = arrayOf(MediaStore.Video.Media.DATA)
+        var cursor: Cursor? = null
+        try {
+            cursor = resolver.query(uri, projection, null, null, null)
+            return if (cursor != null) {
+                val columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
+                cursor.moveToFirst()
+                cursor.getString(columnIndex)
+
+            } else ""
+
+        } catch (e: Exception) {
+            resolver.let {
+                val filePath = (context.applicationInfo.dataDir + File.separator
+                        + System.currentTimeMillis())
+                val file = File(filePath)
+
+                resolver.openInputStream(uri)?.use { inputStream ->
+                    FileOutputStream(file).use { outputStream ->
+                        val buf = ByteArray(4096)
+                        var len: Int
+                        while (inputStream.read(buf).also { len = it } > 0) outputStream.write(
+                            buf,
+                            0,
+                            len
+                        )
+                    }
+                }
+                return file.absolutePath
+            }
+        } finally {
+            cursor?.close()
         }
     }
 }
